@@ -32,6 +32,12 @@ export const handleError = (res: ServerResponse, error: Error) => {
     return;
   }
 
+  const isInvalidParam = error.message.startsWith('Required param');
+  if (isInvalidParam) {
+    res.writeHead(statuses.badRequest);
+    res.end(error.message);
+    return;
+  }
   res.writeHead(statuses.serverError);
   res.end(STATUS_CODES[statuses.serverError]);
 };

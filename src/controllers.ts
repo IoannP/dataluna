@@ -41,8 +41,18 @@ export const purchaseItem = async (req: IncomingMessage, res: ServerResponse, er
       bodyData.push(chunk);
     })
     .on('end', async () => {
-      const body = Buffer.concat(bodyData).toString();
-      const { itemId, userId } = JSON.parse(body);
+      const body = Buffer.concat(bodyData).toString() || "{}";
+      const { userId = null, itemId = null } = JSON.parse(body);
+
+      if (isNull(userId)) {
+        err(res, new Error('Required param: user id'));
+        return;
+      }
+
+      if (isNull(itemId)) {
+        err(res, new Error('Required param: item id'));
+        return;
+      }
 
       const transaction = await Database.initTransaction();
       await transaction.query('BEGIN;');

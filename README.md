@@ -10,6 +10,9 @@ Test: ```npm run test```
 
 Lint: ```npm run lint```
 
+API:
+- GET /items - get items
+- POST /purchase - purchase item (params userId, itemId)
 
 ### Environment
 

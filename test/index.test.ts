@@ -102,5 +102,24 @@ describe('Test api', () => {
           expect(res.text).toBe('Not Found');
         });
     });
+
+    test('Required param user id', async () => {
+      await supertest(app)
+        .post('/purchase')
+        .expect(400)
+        .then((res) => {
+          expect(res.text).toBe('Required param: user id');
+        });
+    });
+
+    test('Required param item id', async () => {
+      await supertest(app)
+        .post('/purchase')
+        .send({ userId: 1 })
+        .expect(400)
+        .then((res) => {
+          expect(res.text).toBe('Required param: item id');
+        });
+    });
   });
 });
