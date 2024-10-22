@@ -1,0 +1,11 @@
+{
+  "compilerOptions": {
+    "target": "ESNext",
+    "module": "CommonJS",
+    "rootDir": "./",
+    "outDir": "./dist",
+    "allowJs": true,
+    "esModuleInterop": true
+  },
+  "include": ["src/**/*.ts", "bin/**/*.ts"],
+}
