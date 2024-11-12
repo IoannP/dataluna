@@ -1,11 +1,13 @@
 {
   "compilerOptions": {
-    "target": "ESNext",
+    "target": "ES2015",
     "module": "CommonJS",
     "rootDir": "./",
     "outDir": "./dist",
-    "allowJs": true,
-    "esModuleInterop": true
+    "allowJs": false,
+    "esModuleInterop": true,
+    "strict": true,
+    "declaration": true
   },
   "include": ["src/**/*.ts", "bin/**/*.ts"],
 }

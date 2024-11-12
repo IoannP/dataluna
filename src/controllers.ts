@@ -1,78 +1,100 @@
-import Database from './Database';
-import Cache from './Cache';
-import SkinportApi from './SkinportApi';
-import { isNull } from './helpers';
+import AuthenticationError from './lib/AuthenticationError';
+import ValidationError from './lib/ValidationError';
+import DatabaseError from './lib/DatabaseError';
+import { isNull, isUndefined, toString, isInvalidBalanceError, isString } from './helpers';
 
-import type { ServerResponse, IncomingMessage } from 'node:http';
+import type { FastifyError, FastifyReply, FastifyRequest } from 'fastify';
+import type { handle } from './types';
 
-export const greetServer = (_req: IncomingMessage, res: ServerResponse, err) => {
-  try {
-    res.writeHead(200);
-    res.end('Hello!');
-  } catch (error) {
-    err(res, error);
-  }  
-};
+export const getItems: handle = (app) => async (_req, reply) => {
+  let items = await app.redis.get('items');
 
-export const getItems = async (_req: IncomingMessage, res: ServerResponse, err) => {
-  try {
-    let items = await Cache.get<object[]>('items');
+  if (isNull(items)) {
+    const { data } = await app.skinportApi.get('/v1/items?app_id=730&currency=EUR&tradable=1');
+    items = data;
 
-    if (isNull(items)) {
-      items = await SkinportApi.getItems();
-      const expirationTimeInSeconds = 60 * 5; // 5 minutes
-      await Cache.set<object[]>('items', items, { EX: expirationTimeInSeconds });
-    }
-
-    res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify(items));
-  } catch (error) {
-    err(res, error);
+    const expirationTimeInSeconds = app.config.ITEMS_CACHE_DURATION || 60 * 5; // 5 minutes
+    await app.redis.setex('items', expirationTimeInSeconds, toString(items));
   }
+
+  const responseData = isString(items) ? JSON.parse(items || '{}') : items;
+  reply.send(responseData);
 };
 
-export const purchaseItem = async (req: IncomingMessage, res: ServerResponse, err) => {
-  const bodyData: Uint8Array[] = [];
-  req
-    .on('error', (error) => {
-      err(res, error);
+export const purchaseItem: handle = (app) => async (req, reply) => {
+  const { userId, itemId } = req.body as { userId: number; itemId: number; };
+
+  const user = await app.db
+    .begin(async (sql) => {
+      const [user] = await sql`
+        UPDATE dataluna.users 
+        SET balance = balance - (SELECT price FROM dataluna.items WHERE id = ${itemId})
+        WHERE id = ${userId}
+        RETURNING *;
+      `;
+      await sql`INSERT INTO dataluna.purchases(item_id, user_id) VALUES(${itemId}, ${userId});`;
+
+      return user;
     })
-    .on('data', (chunk) => {
-      bodyData.push(chunk);
-    })
-    .on('end', async () => {
-      const body = Buffer.concat(bodyData).toString() || "{}";
-      const { userId = null, itemId = null } = JSON.parse(body);
-
-      if (isNull(userId)) {
-        err(res, new Error('Required param: user id'));
-        return;
+    .catch((error) => {
+      if (isInvalidBalanceError(error.message)) {
+        throw new DatabaseError('Invalid balance');
       }
-
-      if (isNull(itemId)) {
-        err(res, new Error('Required param: item id'));
-        return;
-      }
-
-      const transaction = await Database.initTransaction();
-      await transaction.query('BEGIN;');
-
-      try {
-        const updateBalanceQuery = 'UPDATE dataluna.users SET balance = balance - (SELECT price FROM dataluna.items WHERE id = $1) WHERE id = $2;';
-        const insertPurchaseQuery = 'INSERT INTO dataluna.purchases(item_id, user_id) VALUES($1, $2);';
-
-        await transaction.query(updateBalanceQuery, [itemId, userId]);
-        await transaction.query(insertPurchaseQuery, [itemId, userId]);
-
-        await transaction.query('COMMIT;');
-        await transaction.end();
-
-        res.writeHead(200);
-        res.end('Purchased item successfully');
-      } catch (error) {
-        await transaction.query('ROLLBACK;');
-        await transaction.end();
-        err(res, error);
-      }
+      throw error;
     });
+
+  reply.send({ balance: user.balance });
+};
+
+export const authenticate: handle = (app) => async (req, reply) => {
+  const { username, password } = req.body as { username: string; password: string; };
+
+  const [user] = await app.db`
+    SELECT
+      id,
+      username,
+      password
+    FROM dataluna.users
+    WHERE username = ${username} AND password = ${password};
+  `;
+
+  if (isUndefined(user)) {
+    throw new AuthenticationError('User not found')
+  }
+
+  req.session.set('user', { id: user.id, password: user.password });
+  
+  reply.send();
+};
+
+export const updatePassword: handle = (app) => async (req, reply) => {
+  const { userId, password } = req.body as { userId: number; password: string; };
+
+  req.log.debug('Update password request body: ', req.body);
+
+  const [user] = await app.db`SELECT id, username, password FROM dataluna.users WHERE id = ${userId}`;
+  const isSamePassword = user.password === password;
+
+  if (isSamePassword) {
+    throw new ValidationError('Password must be different from the old!');
+  }
+
+  await app.db`UPDATE dataluna.users SET password = ${password}`;
+  await app.redis.del(`users:${user.id}`);
+
+  req.session.delete();
+  reply.send();
+};
+
+export const handleError = (error: FastifyError | Error, request: FastifyRequest, reply: FastifyReply) => {
+  const isFastifyError = 'code' in error;
+
+  request.log.debug('Handled error: ', error.message);
+
+  if (isFastifyError) {
+    reply.status(error.statusCode || 500).send({ error: { type: error.code, reason: error.message }});
+    return;
+  }
+
+  reply.status(500).send({ error: { reason : error.message } });
 };

@@ -10,16 +10,15 @@ Test: ```npm run test```
 
 Lint: ```npm run lint```
 
-API:
-- GET /items - get items
-- POST /purchase - purchase item (params userId, itemId)
 
 ### Environment
 
 | Property                | Value                                 |
 | ----------------------- | ------------------------------------  |
 | DATABES_URL             | Postgres database connection url      |
-| DATABASE_URL_TEST       | Postgres test database connection url |
+| SESSION_SECRET          | Session secret                        |
+| SESSION_SULT            | Session sult enscription              |
 | SKINPORT_API_ORIGIN_URL | Skinport api origin                   |
 | CACHE_URL               | Redis url                             |
+| ITEMS_CACHE_DURATION    | Cache duration in seconds for items   |
 

@@ -1,11 +1,12 @@
 #!/usr/bin/env node
 
-import setupApp from '../src/index';
+import setupApp from "../src/index";
 
 const start = async () => {
-  const { PORT = 3000 } = process.env;
   const app = await setupApp();
-  app.listen(PORT, () => console.log(`server started on port ${PORT}`));
+  const port = app.config.PORT || 3000;
+
+  app.listen({ port }, () => app.log.info(`server started on port ${port}`));
 };
 
 start();

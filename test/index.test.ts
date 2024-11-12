@@ -1,15 +1,17 @@
-import nock from 'fetch-mock';
-import supertest from 'supertest';
+import nock from 'nock';
 import { vi, beforeEach, afterEach, test, describe, expect } from 'vitest';
 
-import Cache from '../src/Cache';
+import { toString } from '../src/helpers'
 import setupApp from '../src/index';
-import Database from '../src/Database';
-import itemsFixtures from '../__fixtures__/items';
+import fixtures from '../__fixtures__';
 
-vi.mock(import('../src/Cache'));
-
-const buildApiUrl = () => `${process.env.SKINPORT_API_ORIGIN_URL}/v1/items?app_id=730&currency=EUR&tradable=1`;
+vi.mock('postgres', () => {
+  return {
+    default: vi.fn(() => ({
+      begin: vi.fn()
+    })),
+  };
+});
 
 let app;
 beforeEach(async () => {
@@ -18,107 +20,193 @@ beforeEach(async () => {
 
 afterEach(async () => {
   vi.clearAllMocks();
-  nock.reset();
-  await Database.query('DROP SCHEMA IF EXISTS dataluna CASCADE;');
+  nock.cleanAll();
 });
 
 describe('Test api', () => {
   describe('Positive case', async () => {
-    const { items } = itemsFixtures.positiveCase;
-    
-    test('Get items from API', async () => {
-      nock.mock(buildApiUrl(), { status: 200, body: items });
+    const { items } = fixtures.positiveCase;
+    const { user } = fixtures;
 
-      vi.spyOn(Cache, 'set').mockImplementation(async () => {});
-      vi.spyOn(Cache, 'get').mockImplementation(async () => null);
+    test('Authentication', async () => {
+      app.db = vi.fn(() => ([user]));
 
-      await supertest(app)
-        .get('/items')
-        .expect(200)
+      await app
+        .inject({ method: 'post', url: '/auth', payload: { username: user.username, password: user.password } })
         .then((res) => {
-          expect(res.body).toStrictEqual(items);
-          expect(Cache.set).toBeCalledWith('items', items, { EX: 60 * 5 });
-          expect(Cache.get).toBeCalledTimes(1);
+          expect(res.headers['set-cookie']).toMatch('session');
+          expect(res.statusCode).toBe(200);
+        })
+    });
+
+    test('Get items from API', async () => {
+      const expirationTimeInSeconds = app.config.ITEMS_CACHE_DURATION || 60 * 5; // 5 minutes
+
+      nock(process.env.SKINPORT_API_ORIGIN_URL || '')
+        .get('/v1/items?app_id=730&currency=EUR&tradable=1')
+        .reply(200, items);
+
+      vi.spyOn(app.redis, 'setex').mockImplementation(async () => {});
+      vi.spyOn(app.redis, 'get').mockImplementation(async () => null);
+
+      await app
+        .inject({ method: 'get', url: '/items'})
+        .then((res) => {
+          expect(res.statusCode).toBe(200);
+          expect(JSON.parse(res.body)).toEqual(items);
+          expect(app.redis.setex).toHaveBeenLastCalledWith('items', expirationTimeInSeconds, toString(items));
+          expect(app.redis.get).toBeCalledTimes(1);
         });
     });
 
     test('Get items from Cache', async () => {
-      vi.spyOn(Cache, 'set').mockImplementation(async () => {});
-      vi.spyOn(Cache, 'get').mockImplementation(async () => items);
+      vi.spyOn(app.redis, 'setex').mockImplementation(async () => {});
+      vi.spyOn(app.redis, 'get').mockImplementation(() => toString(items));
 
-      await supertest(app)
-        .get('/items')
-        .expect(200)
+      await app
+        .inject({ method: 'get', url: '/items' })
         .then((res) => {
-          expect(res.body).toStrictEqual(items);
-          expect(Cache.set).toBeCalledTimes(0);
-          expect(Cache.get).toBeCalledTimes(1);
+          expect(res.statusCode).toBe(200);
+          expect(JSON.parse(res.body)).toStrictEqual(items);
+          expect(app.redis.setex).not.toHaveBeenCalledOnce();
+          expect(app.redis.get).toHaveLastReturnedWith(toString(items));
         });
+    });
+
+    test('Update password', async () => {
+      app.db = () => ([user]);
+      let cookie;
+
+      await app
+        .inject({ method: 'post', url: '/auth', payload: { username: user.username, password: user.password } })
+        .then((res) => {
+          cookie = res.headers['set-cookie'];
+          expect(cookie).toMatch('session');
+          expect(res.statusCode).toBe(200);
+        });
+
+      await app 
+        .inject({ method: 'patch', url: '/password', payload: { userId: user.id, password: 'newPassword' }, headers: { cookie }})
+        .then(async (res) => expect(res.statusCode).toBe(200));
     });
 
     test('Purchase item', async () => {
-      await supertest(app)
-        .post('/purchase')
-        .send({ userId: 1, itemId: 2 })
-        .expect(200)
-        .then(async (res) => {
-          const purchase = await Database.query('SELECT * FROM dataluna.purchases WHERE user_id = $1 AND item_id = $2;', [1, 2]);
-          expect(res.text).toBe('Purchased item successfully');
-          expect(purchase.rows).toMatchObject([ { id: 1, user_id: 1, item_id: 2 } ]);
+      app.db = () => ([user]);
+      let cookie;
+
+      await app
+        .inject({ method: 'post', url: '/auth', payload: { username: user.username, password: user.password } })
+        .then((res) => {
+          cookie = res.headers['set-cookie'];
+          expect(cookie).toMatch('session');
+          expect(res.statusCode).toBe(200);
         });
 
-      await supertest(app)
-        .post('/purchase')
-        .send({ userId: 1, itemId: 1 })
-        .expect(400)
+      app.db = { begin: async () => ({ balance: 10 })};
+      vi.spyOn(app.redis, 'get').mockImplementation(() => toString(user));
+
+      await app 
+        .inject({ method: 'post', url: '/purchase', payload: { userId: user.id, itemId: 1 }, headers: { cookie }})
         .then(async (res) => {
-          const purchase = await Database.query('SELECT * FROM dataluna.purchases WHERE user_id = $1 AND item_id = $2;', [1, 1]);
-          expect(res.text).toBe('Invalid user balance');
-          expect(purchase.rows).toMatchObject([]);
+          expect(res.statusCode).toBe(200);
+          expect(JSON.parse(res.body)).toEqual({ balance: 10 })
         });
-    });
+      });
   });
 
   describe('Negative case', async () => {
-    test('Rate limit', async () => {
-      nock.mock(buildApiUrl(), 429);
-
-      vi.spyOn(Cache, 'set').mockImplementation(async () => {});
-      vi.spyOn(Cache, 'get').mockImplementation(async () => null);
-
-      await supertest(app)
-        .get('/items')
-        .expect(429)
-        .then((res) => {
-          expect(res.text).toBe('Too Many Requests');
-        });
-    });
+    const { user } = fixtures;
 
     test('Not found', async () => {
-      await supertest(app)
-        .get('/someRoute')
-        .expect(404)
+      await app
+        .inject({ method: 'get', url: '/someurl' })
+        .then((res) => expect(res.statusCode).toBe(404));
+    });
+
+    test('Authenticate', async () => {
+      app.db = vi.fn(() => ([]));
+
+      await app
+        .inject({ method: 'post', url: '/auth', payload: { username: user.username, password: user.password } })
         .then((res) => {
-          expect(res.text).toBe('Not Found');
+          expect(res.statusCode).toBe(401);
+          expect(JSON.parse(res.body).error.reason).toBe('User not found');
+        });
+
+      await app
+        .inject({ method: 'post', url: '/auth', payload: { password: user.password } })
+        .then((res) => {
+          expect(res.statusCode).toBe(400);
+          expect(JSON.parse(res.body).error.reason).toBe('body must have required property \'username\'');
+        })
+
+      await app
+        .inject({ method: 'post', url: '/auth', payload: { username: user.username } })
+        .then((res) => {
+          expect(res.statusCode).toBe(400);
+          expect(JSON.parse(res.body).error.reason).toBe('body must have required property \'password\'');
+        })
+    });
+
+    test('Purchase item', async () => {
+      vi.spyOn(app.redis, 'get').mockImplementation(() => toString(user));
+
+      app.db = () => ([user]);
+      let cookie;
+
+      await app
+        .inject({ method: 'post', url: '/auth', payload: { username: user.username, password: user.password } })
+        .then((res) => {
+          cookie = res.headers['set-cookie'];
+          expect(cookie).toMatch('session');
+          expect(res.statusCode).toBe(200);
+        });
+
+      app.db = { begin: async () => {
+        throw new Error('new row for relation "users" violates check constraint "check_balance"');
+      }};
+  
+      await app 
+        .inject({ method: 'post', url: '/purchase', payload: { userId: user.id, itemId: 1 }, headers: { cookie }})
+        .then(async (res) => {
+          expect(res.statusCode).toBe(400);
+          expect(JSON.parse(res.body).error.reason).toBe('Invalid balance');
         });
     });
 
-    test('Required param user id', async () => {
-      await supertest(app)
-        .post('/purchase')
-        .expect(400)
-        .then((res) => {
-          expect(res.text).toBe('Required param: user id');
-        });
-    });
+    test('Update password', async () => {
+      app.db = () => ([user]);
+      vi.spyOn(app.redis, 'del').mockImplementation(async () => {});
 
-    test('Required param item id', async () => {
-      await supertest(app)
-        .post('/purchase')
-        .send({ userId: 1 })
-        .expect(400)
+      let cookie;
+
+      await app
+        .inject({ method: 'post', url: '/auth', payload: { username: user.username, password: user.password } })
         .then((res) => {
-          expect(res.text).toBe('Required param: item id');
+          cookie = res.headers['set-cookie'];
+          expect(cookie).toMatch('session');
+          expect(res.statusCode).toBe(200);
+        });
+
+      await app 
+        .inject({ method: 'patch', url: '/password', payload: {  password: 'newPassword' }, headers: { cookie }})
+        .then(async (res) => {
+          expect(res.statusCode).toBe(400);
+          expect(JSON.parse(res.body).error.reason).toBe('body must have required property \'userId\'');
+        });
+
+      await app 
+        .inject({ method: 'patch', url: '/password', payload: {  userId: user.id }, headers: { cookie }})
+        .then(async (res) => {
+          expect(res.statusCode).toBe(400);
+          expect(JSON.parse(res.body).error.reason).toBe('body must have required property \'password\'');
+        });
+
+      await app 
+        .inject({ method: 'patch', url: '/password', payload: {  userId: user.id, password: user.password }, headers: { cookie }})
+        .then(async (res) => {
+          expect(res.statusCode).toBe(400);
+          expect(JSON.parse(res.body).error.reason).toBe('Password must be different from the old!');
         });
     });
   });

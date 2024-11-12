@@ -1,4 +1,5 @@
 export default {
+  user: { id: 1, username: 'username', password: 'password', balance: 100 },
   positiveCase: {
     items: [
       { id: 1, name: "Item 1" },
@@ -7,15 +8,5 @@ export default {
       { id: 4, name: "Item 4" },
       { id: 5, name: "Item 5" },
     ],
-  },
-  negativeCase: {
-    rateLimit: {
-      errors: [
-        {
-          id: "rate_limit_exceeded",
-          message: "Rate limit exceeded",
-        },
-      ],
-    },
-  },
+  }
 };

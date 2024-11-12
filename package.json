@@ -1,35 +1,34 @@
 {
   "name": "test_server",
   "version": "1.0.0",
-  "main": "index.js",
   "scripts": {
-    "lint": "eslint .",
+    "lint": "eslint ./src",
     "test": "vitest",
     "build": "tsc",
     "start": "npm run build && node ./dist/bin/index.js",
     "dev": "nodemon ./bin/index.ts"
   },
-  "author": "",
   "license": "ISC",
-  "description": "Run development: ```npm run dev ```",
   "devDependencies": {
     "@eslint/js": "^9.13.0",
     "@types/node": "^22.7.7",
     "eslint": "^9.13.0",
-    "fetch-mock": "^11.1.5",
     "globals": "^15.11.0",
     "nock": "^13.5.5",
     "nodemon": "^3.1.7",
-    "supertest": "^7.0.0",
     "ts-node": "^10.9.2",
     "typescript": "^5.6.3",
     "typescript-eslint": "^8.10.0",
     "vitest": "^2.1.3"
   },
   "dependencies": {
+    "@fastify/env": "^5.0.1",
+    "@fastify/redis": "^7.0.1",
+    "@fastify/secure-session": "^8.1.0",
+    "axios": "^1.7.7",
     "dotenv": "^16.4.5",
-    "pg": "^8.13.0",
-    "redis": "^4.7.0"
+    "fastify": "^5.1.0",
+    "postgres": "^3.4.5"
   },
   "directories": {
     "test": "test"

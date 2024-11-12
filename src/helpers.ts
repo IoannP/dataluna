@@ -1,43 +1,9 @@
-import { ServerResponse, STATUS_CODES } from 'node:http';
+export const isUndefined = (value: unknown): boolean => typeof value === 'undefined';
 
-enum statuses {
-  rateLimit = 429,
-  badRequest = 400,
-  notFound = 404,
-  serverError = 500,
-}
+export const isNull = (value: unknown): boolean => value === null;
 
-export const isUndefined = (value): boolean => typeof value === 'undefined';
-export const isNull = (value): boolean => value === null;
+export const toString = (value: unknown): string => JSON.stringify(value);
 
-export const handleError = (res: ServerResponse, error: Error) => {
-  const isRateLimitError = error.message === STATUS_CODES[statuses.rateLimit];
-  if (isRateLimitError) {
-    res.writeHead(statuses.rateLimit);
-    res.end(STATUS_CODES[statuses.rateLimit]);
-    return;
-  }
+export const isInvalidBalanceError = (message: string) => message.includes('check_balance');
 
-  const isInvalidBalance = error.message.includes('check_balance');
-  if (isInvalidBalance) {
-    res.writeHead(statuses.badRequest);
-    res.end('Invalid user balance');
-    return;
-  }
-
-  const isNotFound = error.message.includes('not found');
-  if (isNotFound) {
-    res.writeHead(statuses.notFound);
-    res.end(STATUS_CODES[statuses.notFound]);
-    return;
-  }
-
-  const isInvalidParam = error.message.startsWith('Required param');
-  if (isInvalidParam) {
-    res.writeHead(statuses.badRequest);
-    res.end(error.message);
-    return;
-  }
-  res.writeHead(statuses.serverError);
-  res.end(STATUS_CODES[statuses.serverError]);
-};
+export const isString = (value: unknown): boolean => typeof value === 'string';
